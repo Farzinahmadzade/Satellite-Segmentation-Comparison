@@ -1,4 +1,3 @@
-import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -107,7 +106,7 @@ def log_to_tensorboard(writer, history, epoch, loader, model, device):
         writer.add_image('Input | Label | Predict', 
                         vutils.make_grid(final_grid, nrow=3, normalize=False, padding=5), 
                         epoch)
-    
+        
     model.train()
 
 def plot_training_history(history_dict, output_path):
