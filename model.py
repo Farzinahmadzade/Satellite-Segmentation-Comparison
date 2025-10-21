@@ -35,7 +35,7 @@ class ManualUNet(nn.Module):
         self.up1 = nn.ConvTranspose2d(128, 64, 2, stride=2)
         self.dec1 = DoubleConv(128, 64)
         self.final = nn.Conv2d(64, n_classes, 1)
-        
+
     def forward(self, x):
         e1 = self.enc1(x)
         e2 = self.enc2(nn.functional.max_pool2d(e1, 2))
@@ -76,4 +76,4 @@ def get_model(model_name="manual", encoder_name="resnet34"):
         return ManualUNet()
     elif model_name.lower() == "smp":
         return SMPUNet(encoder_name=encoder_name)
-    raise ValueError("model_name must be 'manual' or 'smp'")
+    raise ValueError(f"Unknown model: {model_name}")
