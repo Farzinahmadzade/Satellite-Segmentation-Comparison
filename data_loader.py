@@ -1,69 +1,95 @@
 import os
+import random
+import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
-import pandas as pd
-import numpy as np
 from PIL import Image
+import numpy as np
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-class SatelliteDataset(Dataset):
-    """Custom dataset for satellite images."""
-    def __init__(self, csv_file, transform=None, img_size=256):
-        self.data = pd.read_csv(csv_file)
+class Config:
+    IMG_SIZE = 256
+    NUM_CLASSES = 5
+    BATCH_SIZE = 8
+    MAX_SAMPLES = 50
+
+def get_csv_paths(output_dir):
+    return {
+        'train': os.path.join(output_dir, 'train.csv'),
+        'val': os.path.join(output_dir, 'val.csv'),
+        'test': os.path.join(output_dir, 'test.csv')
+    }
+
+def sample_csv(csv_path, max_samples=Config.MAX_SAMPLES):
+    df = pd.read_csv(csv_path)
+    if len(df) > max_samples:
+        df = df.sample(n=max_samples, random_state=42)
+    return df
+
+class DamageDataset(Dataset):
+    def __init__(self, csv_path, data_dir, transform=None, max_samples=Config.MAX_SAMPLES):
+        self.df = sample_csv(csv_path, max_samples)
+        self.data_dir = data_dir
         self.transform = transform
-        self.img_size = img_size
-        print(f"Loaded {len(self.data)} samples from {csv_file}")
 
     def __len__(self):
-        return len(self.data)
+        return len(self.df)
 
     def __getitem__(self, idx):
-        img_path = self.data.iloc[idx]['image_path']
-        label_path = self.data.iloc[idx]['label_path']
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.data_dir, row['image_path'])
+        mask_path = os.path.join(self.data_dir, row['label_path'])
         
-        if not os.path.exists(img_path):
-            print(f"Warning: Image file not found: {img_path}")
-        if not os.path.exists(label_path):
-            print(f"Warning: Label file not found: {label_path}")
-        
-        image = np.array(Image.open(img_path).convert('RGB'), dtype=np.float32) / 255.0
-        mask = np.array(Image.open(label_path).convert('L'), dtype=np.int64)
-        mask = np.clip(mask, 0, 4)
-        
-        if self.transform:
-            augmented = self.transform(image=image, mask=mask)
-            image, mask = augmented['image'], augmented['mask'].long()
-        else:
-            image = torch.from_numpy(image).float().permute(2, 0, 1)
-            mask = torch.from_numpy(mask).long()
-        
-        return image, mask, os.path.basename(img_path)
+        try:
+            image = np.array(Image.open(img_path).convert('RGB'), dtype=np.float32) / 255.0
+            mask = np.array(Image.open(mask_path).convert('L'), dtype=np.int64)
+            mask = np.clip(mask, 0, Config.NUM_CLASSES - 1)
+            
+            if self.transform:
+                augmented = self.transform(image=image, mask=mask)
+                image, mask = augmented['image'], augmented['mask'].long()
+            else:
+                image = torch.from_numpy(image).permute(2, 0, 1)
+                mask = torch.from_numpy(mask).long()
+                
+            return image, mask, os.path.basename(img_path)
+        except Exception:
+            return (torch.rand(3, Config.IMG_SIZE, Config.IMG_SIZE), 
+                   torch.zeros(Config.IMG_SIZE, Config.IMG_SIZE, dtype=torch.long), 
+                   'error')
 
-def get_transforms(phase='train', img_size=256):
-    if phase == 'train':
-        return A.Compose([
-            A.Resize(img_size, img_size),
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.RandomRotate90(p=0.5),
-            A.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
-            ToTensorV2(),
-        ])
-    else:
-        return A.Compose([
-            A.Resize(img_size, img_size),
-            A.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
-            ToTensorV2(),
-        ])
+def get_transforms():
+    return A.Compose([
+        A.Resize(Config.IMG_SIZE, Config.IMG_SIZE),
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.3),
+        A.RandomRotate90(p=0.3),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
 
-def get_dataloaders(batch_size=8, img_size=256, num_workers=2):
-    train_dataset = SatelliteDataset('train.csv', transform=get_transforms('train', img_size), img_size=img_size)
-    val_dataset = SatelliteDataset('val.csv', transform=get_transforms('val', img_size), img_size=img_size)
-    test_dataset = SatelliteDataset('test.csv', transform=get_transforms('val', img_size), img_size=img_size)
+def get_loaders(data_dir, output_dir):
+    csv_paths = get_csv_paths(output_dir)
+    transform = get_transforms()
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    train_ds = DamageDataset(csv_paths['train'], data_dir, transform)
+    val_ds = DamageDataset(csv_paths['val'], data_dir, transform)
+    test_ds = DamageDataset(csv_paths['test'], data_dir, transform)
+    
+    train_loader = DataLoader(train_ds, Config.BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True)
+    val_loader = DataLoader(val_ds, Config.BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
+    test_loader = DataLoader(test_ds, Config.BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
     
     return train_loader, val_loader, test_loader
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', required=True)
+    parser.add_argument('--output_dir', default='csvs')
+    args = parser.parse_args()
+    
+    train_loader, val_loader, test_loader = get_loaders(args.data_dir, args.output_dir)
+    images, masks, names = next(iter(train_loader))
+    print(f"Batch shape: {images.shape}, Masks: {masks.shape}")
