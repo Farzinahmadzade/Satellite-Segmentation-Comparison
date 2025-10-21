@@ -3,73 +3,151 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from pathlib import Path
+from torch.utils.tensorboard import SummaryWriter
+import torchvision.utils as vutils
+from datetime import datetime
 from data_loader import Config
 
 class Metrics:
     @staticmethod
-    def iou(pred, target, num_classes=Config.NUM_CLASSES):
-        pred = pred.argmax(dim=1).cpu().numpy().flatten()
-        target = target.cpu().numpy().flatten()
-        ious = []
-        for cls in range(num_classes):
-            pred_cls = (pred == cls)
-            target_cls = (target == cls)
-            intersection = np.logical_and(pred_cls, target_cls).sum()
-            union = np.logical_or(pred_cls, target_cls).sum()
-            ious.append(1.0 if union == 0 else intersection / union)
-        return np.mean(ious)
+    def accuracy(outputs, masks):
+        preds = torch.argmax(outputs, dim=1)
+        correct_pixels = (preds == masks).sum().item()
+        total_pixels = torch.numel(masks)
+        return correct_pixels / total_pixels
 
     @staticmethod
-    def accuracy(pred, target):
-        pred = pred.argmax(dim=1).cpu().numpy().flatten()
-        target = target.cpu().numpy().flatten()
-        return np.mean(pred == target)
+    def iou(outputs, masks, num_classes):
+        preds = torch.argmax(outputs, dim=1)
+        preds = preds.flatten()
+        masks = masks.flatten()
+        
+        ious = []
+        for c in range(num_classes):
+            pred_c = (preds == c)
+            mask_c = (masks == c)
+            intersection = (pred_c & mask_c).sum().item()
+            union = (pred_c | mask_c).sum().item()
+            
+            if union == 0:
+                iou_c = np.nan
+            else:
+                iou_c = intersection / union
+            ious.append(iou_c)
+            
+        m_iou = np.nanmean(ious)
+        return m_iou, ious
 
-def save_model(model, model_name, epoch, val_iou, output_dir):
-    model_path = os.path.join(output_dir, f"{model_name}_best.pth")
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'val_iou': val_iou,
-        'model_name': model_name
-    }, model_path)
+def get_writer(output_dir, model_name):
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = Path(output_dir) / 'logs' / f"{model_name}_{timestamp}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return SummaryWriter(str(log_dir))
 
-def load_model(model_name, output_dir, device):
-    model_path = os.path.join(output_dir, f"{model_name}_best.pth")
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found: {model_path}")
+def save_model(model, model_name, epoch, iou, output_path):
+    save_dir = Path(output_path) / 'checkpoints'
+    save_dir.mkdir(exist_ok=True)
+    filename = save_dir / f"{model_name}_epoch{epoch+1}_iou{iou:.4f}.pt"
+    torch.save(model.state_dict(), filename)
+    print(f"Model saved to {filename}")
+
+def log_to_tensorboard(writer, history, epoch, loader, model, device):
+    writer.add_scalar('Loss/Train', history['train_loss'][-1], epoch)
+    writer.add_scalar('Loss/Validation', history['val_loss'][-1], epoch)
+    writer.add_scalar('IoU/Train', history['train_iou'][-1], epoch)
+    writer.add_scalar('IoU/Validation', history['val_iou'][-1], epoch)
+    writer.add_scalar('Accuracy/Train', history['train_acc'][-1], epoch)
+    writer.add_scalar('Accuracy/Validation', history['val_acc'][-1], epoch)
     
-    from model import get_model
-    model = get_model(model_name).to(device)
-    checkpoint = torch.load(model_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    return model
-
-def plot_training_history(histories, output_dir):
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    metrics = ['loss', 'iou', 'acc']
+    model.eval()
+    with torch.no_grad():
+        images, masks_true, _ = next(iter(loader))
+        images = images[:4].to(device)
+        outputs = model(images)
+        masks_pred = torch.argmax(outputs, dim=1)
+        
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(device)
+        images_vis = images * std + mean
+        images_vis = torch.clamp(images_vis, 0, 1).cpu()
+        
+        colors = torch.tensor([
+            [0.00, 0.00, 0.00],  # 0: bareland
+            [0.50, 0.50, 0.00],  # 1: rangeland
+            [0.80, 0.80, 0.80],  # 2: development
+            [0.00, 0.00, 1.00],  # 3: road
+            [0.00, 1.00, 0.00],  # 4: tree
+            [0.00, 0.00, 0.80],  # 5: water
+            [1.00, 1.00, 0.00],  # 6: agricultural
+            [1.00, 0.00, 0.00],  # 7: building
+            [0.80, 0.00, 0.80]   # 8: nodata
+        ]).float().view(9, 3, 1, 1)
+        
+        masks_rgb = torch.zeros(4, 3, 256, 256)
+        preds_rgb = torch.zeros(4, 3, 256, 256)
+        
+        masks_cpu = masks_true[:4].cpu()
+        preds_cpu = masks_pred[:4].cpu()
+        
+        for i in range(4):
+            for cls in range(Config.NUM_CLASSES):
+                mask_cls = (masks_cpu[i] == cls).float().unsqueeze(0)
+                pred_cls = (preds_cpu[i] == cls).float().unsqueeze(0)
+                masks_rgb[i] += colors[cls] * mask_cls
+                preds_rgb[i] += colors[cls] * pred_cls
+        
+        row1 = torch.cat([images_vis[0:1], masks_rgb[0:1], preds_rgb[0:1]], dim=2)
+        row2 = torch.cat([images_vis[1:2], masks_rgb[1:2], preds_rgb[1:2]], dim=2)
+        row3 = torch.cat([images_vis[2:3], masks_rgb[2:3], preds_rgb[2:3]], dim=2)
+        row4 = torch.cat([images_vis[3:4], masks_rgb[3:4], preds_rgb[3:4]], dim=2)
+        
+        final_grid = torch.cat([row1, row2, row3, row4], dim=0)
+        
+        writer.add_image('Input | Label | Predict', 
+                        vutils.make_grid(final_grid, nrow=3, normalize=False, padding=5), 
+                        epoch)
     
-    for i, metric in enumerate(metrics):
-        ax = axes[i//2, i%2]
-        for model_name, history in histories.items():
-            ax.plot(history[f'train_{metric}'], label=f'{model_name} train')
-            ax.plot(history[f'val_{metric}'], label=f'{model_name} val', linestyle='--')
-        ax.set_title(metric.capitalize())
+    model.train()
+
+def plot_training_history(history_dict, output_path):
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    metrics = [('train_loss', 'val_loss', 'Loss'), 
+               ('train_iou', 'val_iou', 'IoU'), 
+               ('train_acc', 'val_acc', 'Accuracy')]
+    
+    for idx, (train_key, val_key, title) in enumerate(metrics):
+        row, col = idx // 2, idx % 2
+        ax = axes[row, col]
+        
+        for name, history in history_dict.items():
+            ax.plot(history[train_key], label=f'{name}_train', linestyle='-')
+            ax.plot(history[val_key], label=f'{name}_val', linestyle='--')
+        
+        ax.set_title(title)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel(title)
         ax.legend()
         ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'training_history.png'), dpi=300, bbox_inches='tight')
+    plot_path = Path(output_path) / 'training_history.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close()
+    return str(plot_path)
 
-def print_final_results(histories):
+def print_final_results(history_dict):
     df_data = []
-    for model_name, history in histories.items():
+    for name, history in history_dict.items():
+        best_iou = max(history['val_iou'])
+        final_iou = history['val_iou'][-1]
+        final_acc = history['val_acc'][-1]
+        
         df_data.append({
-            'Model': model_name.upper(),
-            'Best IoU': f"{max(history['val_iou']):.3f}",
-            'Final IoU': f"{history['val_iou'][-1]:.3f}",
-            'Final Acc': f"{history['val_acc'][-1]:.3f}"
+            'Model': name.upper(),
+            'Best IoU': f"{best_iou:.3f}",
+            'Final IoU': f"{final_iou:.3f}",
+            'Final Acc': f"{final_acc:.3f}"
         })
     
     df = pd.DataFrame(df_data)
