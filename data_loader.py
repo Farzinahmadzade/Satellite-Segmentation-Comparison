@@ -1,5 +1,4 @@
 import os
-import random
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -18,7 +17,7 @@ class Config:
 def get_csv_paths(output_dir):
     return {
         'train': os.path.join(output_dir, 'train.csv'),
-        'val': os.path.join(output_dir, 'val.csv'),
+        'val': os.path.join(output_dir, 'test.csv'),
         'test': os.path.join(output_dir, 'test.csv')
     }
 
