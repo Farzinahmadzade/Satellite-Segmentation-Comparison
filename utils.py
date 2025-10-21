@@ -1,41 +1,40 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import io
 import cv2
 from sklearn.metrics import jaccard_score, accuracy_score, precision_score, recall_score, f1_score
-import seaborn as sns
 import pandas as pd
 
 class Visualizer:
-    # رنگ‌ها برای کلاس‌های مختلف
     COLORS = np.array([
-        [0, 0, 0],       # Class 0: Background
-        [0, 0, 255],     # Class 1: Blue  
-        [255, 255, 0],   # Class 2: Yellow
-        [0, 255, 0],     # Class 3: Green
-        [255, 0, 0],     # Class 4: Red
+        [0, 0, 0],       # Background
+        [0, 0, 255],     # Class1
+        [255, 255, 0],   # Class2
+        [0, 255, 0],     # Class3
+        [255, 0, 0],     # Class4
     ], dtype=np.uint8)
     
     CLASS_NAMES = ['Background', 'Class1', 'Class2', 'Class3', 'Class4']
     
     @classmethod
     def mask_to_rgb(cls, mask):
-        """تبدیل ماسک عددی به تصویر رنگی"""
+        """Convert numeric mask to RGB color mask."""
         if isinstance(mask, torch.Tensor):
             mask = mask.cpu().numpy()
         
         h, w = mask.shape
         rgb = np.zeros((h, w, 3), dtype=np.uint8)
         
-        for i in range(len(cls.COLORS)):
-            rgb[mask == i] = cls.COLORS[i]
+        mask = np.clip(mask, 0, len(cls.COLORS)-1)
+        
+        for i, color in enumerate(cls.COLORS):
+            rgb[mask == i] = color
             
         return rgb
     
     @classmethod
     def create_comparison_grid(cls, images, true_masks, pred_masks, filenames=None, num_samples=3):
-        """ایجاد گرید مقایسه‌ای"""
+        """Create side-by-side comparison grid."""
         fig, axes = plt.subplots(num_samples, 4, figsize=(20, 5 * num_samples))
         
         if num_samples == 1:
@@ -83,42 +82,33 @@ class Visualizer:
         return fig
 
 class MetricsCalculator:
-    """محاسبه متریک‌های مختلف"""
+    """Calculate segmentation metrics."""
     
     @staticmethod
     def calculate_metrics(preds, targets, num_classes=5):
-        """محاسبه متریک‌های مختلف"""
         preds_flat = preds.cpu().numpy().flatten()
         targets_flat = targets.cpu().numpy().flatten()
         
         metrics = {}
-        
         iou_scores = []
         for class_id in range(num_classes):
-            iou = jaccard_score(targets_flat == class_id, preds_flat == class_id, 
-                               zero_division=0)
+            iou = jaccard_score(targets_flat == class_id, preds_flat == class_id, zero_division=0)
             iou_scores.append(iou)
             metrics[f'IoU_Class_{class_id}'] = iou
         
         metrics['mIoU'] = np.mean(iou_scores)
-        
         metrics['Accuracy'] = accuracy_score(targets_flat, preds_flat)
-        metrics['Precision'] = precision_score(targets_flat, preds_flat, 
-                                             average='macro', zero_division=0)
-        metrics['Recall'] = recall_score(targets_flat, preds_flat, 
-                                       average='macro', zero_division=0)
-        metrics['F1-Score'] = f1_score(targets_flat, preds_flat, 
-                                     average='macro', zero_division=0)
+        metrics['Precision'] = precision_score(targets_flat, preds_flat, average='macro', zero_division=0)
+        metrics['Recall'] = recall_score(targets_flat, preds_flat, average='macro', zero_division=0)
+        metrics['F1-Score'] = f1_score(targets_flat, preds_flat, average='macro', zero_division=0)
         
         return metrics
     
     @staticmethod
     def create_metrics_dataframe(metrics_history):
-        """ایجاد DataFrame از تاریخچه متریک‌ها"""
         return pd.DataFrame(metrics_history)
 
 def save_checkpoint(model, optimizer, epoch, metrics, filepath):
-    """ذخیره چک‌پوینت"""
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -128,7 +118,6 @@ def save_checkpoint(model, optimizer, epoch, metrics, filepath):
     torch.save(checkpoint, filepath)
 
 def load_checkpoint(model, optimizer, filepath):
-    """لود چک‌پوینت"""
     checkpoint = torch.load(filepath)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
