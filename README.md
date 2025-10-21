@@ -17,3 +17,4 @@ A comprehensive benchmark for comparing different deep learning models on satell
 | U-Net | - | - | - |
 | DeepLabV3+ | - | - | - |
 | PSPNet | - | - | - |
+| FPN | - | - | - |
