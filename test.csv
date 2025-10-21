@@ -1,6 +1,6 @@
 image_path,label_path
-K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\images\aachen_17.tif,K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\labels\aachen_17.tif
-K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\images\aachen_20.tif,K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\labels\aachen_20.tif
-K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\images\aachen_23.tif,K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\labels\aachen_23.tif
-K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\images\aachen_25.tif,K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\labels\aachen_25.tif
-K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\images\aachen_3.tif,K:/UNI/MAHBOD/OpenEarthMap/OpenEarthMap_wo_xBD\aachen\labels\aachen_3.tif
+aachen/images/aachen_17.tif,aachen/labels/aachen_17.tif
+aachen/images/aachen_20.tif,aachen/labels/aachen_20.tif
+aachen/images/aachen_23.tif,aachen/labels/aachen_23.tif
+aachen/images/aachen_25.tif,aachen/labels/aachen_25.tif
+aachen/images/aachen_3.tif,aachen/labels/aachen_3.tif
