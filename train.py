@@ -1,130 +1,177 @@
 import os
-import glob
 import shutil
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
+from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import numpy as np
-from datetime import datetime
-
-from config import Config
 from dataset import SegmentationDataset
-from utils import iou_score, dice_score
-from model import get_model
+from config import Config
+from utils import Metrics
+import segmentation_models_pytorch as smp
+import argparse
 
-import warnings
-warnings.filterwarnings("ignore")
+def get_model(model_name, encoder_name='resnet34', in_channels=3, classes=Config.NUM_CLASSES):
+    model_name = model_name.lower()
+    if model_name == 'unet':
+        return smp.Unet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'unet++':
+        return smp.UnetPlusPlus(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'fpn':
+        return smp.FPN(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'pspnet':
+        return smp.PSPNet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'deeplabv3':
+        return smp.DeepLabV3(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'deeplabv3+':
+        return smp.DeepLabV3Plus(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'linknet':
+        return smp.Linknet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'manet':
+        return smp.MAnet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'pan':
+        return smp.PAN(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'upernet':
+        return smp.UPerNet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'segformer':
+        return smp.Segformer(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif model_name == 'dpt':
+        return smp.DPT(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    else:
+        raise NotImplementedError(f"Model {model_name} not implemented")
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def train_model(data_dir, model_name, encoder_name, output_dir, limit_samples=0):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
-def prepare_dataset(data_dir):
-    image_paths = sorted(glob.glob(os.path.join(data_dir, "*", "images", "*.png")))
-    mask_paths = sorted(glob.glob(os.path.join(data_dir, "*", "labels", "*.png")))
-
-    assert len(image_paths) == len(mask_paths), "Mismatch image/mask count!"
-    dataset = SegmentationDataset(image_paths, mask_paths, augment=True, image_size=Config.IMAGE_SIZE)
-    val_size = int(len(dataset) * Config.VAL_SPLIT)
-    train_size = len(dataset) - val_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    return train_dataset, val_dataset
-
-def visualize_batch(writer, images, masks, preds, step):
-    import torchvision
-    masks_rgb = masks.unsqueeze(1).repeat(1,3,1,1)
-    preds_rgb = preds.unsqueeze(1).repeat(1,3,1,1)
-    grid_list = []
-    for i in range(images.size(0)):
-        row = torch.cat([images[i], masks_rgb[i], preds_rgb[i]], dim=2)
-        grid_list.append(row)
-    grid = torch.stack(grid_list)
-    writer.add_images("Batch Predictions", grid, global_step=step)
-
-def train_model(data_dir, model_name="unet", encoder_name="resnet34", output_dir="./outputs"):
-    # پاک کردن logهای قبلی
-    if os.path.exists(Config.LOG_DIR):
-        shutil.rmtree(Config.LOG_DIR)
-    os.makedirs(Config.LOG_DIR, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
+    log_dir = os.path.join(output_dir, "logs")
+    shutil.rmtree(log_dir, ignore_errors=True)
+    writer = SummaryWriter(log_dir)
 
-    writer = SummaryWriter(log_dir=os.path.join(Config.LOG_DIR, f"{model_name}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"))
+    full_dataset = SegmentationDataset(
+        data_dir, split="train", image_size=Config.IMAGE_SIZE, limit_samples=limit_samples
+    )
+    total_size = len(full_dataset)
+    val_size = int(total_size * Config.VAL_SPLIT)
+    train_size = total_size - val_size
 
-    train_dataset, val_dataset = prepare_dataset(data_dir)
-    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=Config.NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=Config.NUM_WORKERS)
+    train_dataset, val_dataset = random_split(
+        full_dataset, [train_size, val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
 
-    model = get_model(model_name, encoder_name, num_classes=Config.NUM_CLASSES).to(device)
+    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True,
+                              num_workers=Config.NUM_WORKERS, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False,
+                            num_workers=Config.NUM_WORKERS, pin_memory=True)
+
+    model = get_model(model_name, encoder_name).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=Config.LR)
+    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
 
-    best_iou = 0
+    best_val_loss = float("inf")
+    patience_counter = 0
+    early_stop_patience = 5
+
+    print(f"Training {model_name} ({encoder_name}) for {Config.EPOCHS} epochs | Batch: {Config.BATCH_SIZE} | Classes: {Config.NUM_CLASSES}")
 
     for epoch in range(Config.EPOCHS):
         model.train()
-        running_loss = 0
-        pbar = tqdm(train_loader, desc=f"Epoch [{epoch+1}/{Config.EPOCHS}]")
-        for images, masks in pbar:
-            images = images.to(device)
-            masks = masks.to(device)
+        train_loss = 0.0
+        train_metrics = {"iou":0, "dice":0, "acc":0}
+        num_batches = 0
 
+        loop = tqdm(train_loader, desc=f"Epoch [{epoch+1}/{Config.EPOCHS}] Training", leave=False)
+        for images, masks in loop:
+            images, masks = images.to(device), masks.to(device)
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, masks)
             loss.backward()
             optimizer.step()
 
-            running_loss += loss.item()
-            pbar.set_postfix(loss=loss.item())
+            batch_metrics = Metrics.compute_batch_metrics(outputs, masks, Config.NUM_CLASSES)
+            train_loss += loss.item()
+            for k in train_metrics:
+                train_metrics[k] += batch_metrics[k]
+            num_batches += 1
 
-        train_loss = running_loss / len(train_loader)
-        writer.add_scalar("Train/Loss", train_loss, epoch)
-        print(f"📉 Epoch {epoch+1}: Train loss = {train_loss:.4f}")
+        train_loss /= num_batches
+        for k in train_metrics:
+            train_metrics[k] /= num_batches
 
-        # Validation
         model.eval()
-        val_loss = 0
-        all_preds, all_masks = [], []
+        val_loss = 0.0
+        val_metrics = {"iou":0, "dice":0, "acc":0}
+        val_batches = 0
         with torch.no_grad():
-            for images, masks in val_loader:
-                images = images.to(device)
-                masks = masks.to(device)
+            for batch_idx, (images, masks) in enumerate(val_loader):
+                images, masks = images.to(device), masks.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, masks)
+                batch_metrics = Metrics.compute_batch_metrics(outputs, masks, Config.NUM_CLASSES)
+
                 val_loss += loss.item()
-                all_preds.append(outputs.cpu())
-                all_masks.append(masks.cpu())
+                for k in val_metrics:
+                    val_metrics[k] += batch_metrics[k]
+                val_batches += 1
 
-            val_loss /= len(val_loader)
-            all_preds = torch.cat(all_preds, dim=0)
-            all_masks = torch.cat(all_masks, dim=0)
+                if batch_idx==0:
+                    for j in range(min(2, images.size(0))):
+                        Metrics.visualize_sample(images[j], masks[j], outputs[j], j, writer, epoch)
 
-            iou = iou_score(all_preds, all_masks, num_classes=Config.NUM_CLASSES)
-            dice = dice_score(all_preds, all_masks, num_classes=Config.NUM_CLASSES)
+        val_loss /= val_batches
+        for k in val_metrics:
+            val_metrics[k] /= val_batches
 
-        writer.add_scalar("Val/Loss", val_loss, epoch)
-        writer.add_scalar("Val/IoU", iou, epoch)
-        writer.add_scalar("Val/Dice", dice, epoch)
-        print(f"📊 Validation: loss={val_loss:.4f}, IoU={iou:.4f}, Dice={dice:.4f}")
+        scheduler.step(val_loss)
 
-        # Visualize first batch of validation
-        visualize_batch(writer, images.cpu(), masks.cpu(), torch.argmax(outputs.cpu(), dim=1), step=epoch)
+        writer.add_scalars("Loss", {"Train":train_loss,"Val":val_loss}, epoch)
+        writer.add_scalars("IoU", {"Train":train_metrics["iou"],"Val":val_metrics["iou"]}, epoch)
+        writer.add_scalars("Dice", {"Train":train_metrics["dice"],"Val":val_metrics["dice"]}, epoch)
+        writer.add_scalars("Accuracy", {"Train":train_metrics["acc"],"Val":val_metrics["acc"]}, epoch)
 
-        # Save best model
-        if iou > best_iou:
-            best_iou = iou
-            torch.save(model.state_dict(), Config.BEST_MODEL_PATH)
-            print(f"💾 Checkpoint saved: {Config.BEST_MODEL_PATH}")
+        print(f"\nEpoch {epoch+1}/{Config.EPOCHS} | Train: Loss={train_loss:.4f}, IoU={train_metrics['iou']:.3f}, Dice={train_metrics['dice']:.3f}, Acc={train_metrics['acc']:.3f} | Val: Loss={val_loss:.4f}, IoU={val_metrics['iou']:.3f}, Dice={val_metrics['dice']:.3f}, Acc={val_metrics['acc']:.3f}")
+
+        model_path = os.path.join(output_dir, f"epoch_{epoch+1}_val_{val_loss:.4f}.pth")
+        torch.save(model.state_dict(), model_path)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            best_path = os.path.join(output_dir, "best_model.pth")
+            torch.save(model.state_dict(), best_path)
+            print(f"New best model saved: {best_path} (val_loss={best_val_loss:.4f})")
+        else:
+            patience_counter +=1
+            if patience_counter >= early_stop_patience:
+                print("Early stopping triggered.")
+                break
 
     writer.close()
+    print(f"\n✅ Training completed! Best model: {best_path}")
+    print(f"Classes: {Config.CLASS_NAMES}")
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--model_name", type=str, default="unet")
+    parser.add_argument("--model_name", type=str, default="unet", help="Model to train or 'all' for all models")
     parser.add_argument("--encoder_name", type=str, default="resnet34")
     parser.add_argument("--output_dir", type=str, default="./outputs")
+    parser.add_argument("--limit_samples", type=int, default=0, help="Limit number of samples for quick test")
     args = parser.parse_args()
 
-    train_model(args.data_dir, args.model_name, args.encoder_name, args.output_dir)
+    model_list = [
+        "unet","unet++","fpn","pspnet","deeplabv3","deeplabv3+","linknet",
+        "manet","pan","upernet","segformer","dpt"
+    ]
+
+    if args.model_name.lower() == "all":
+        for m in model_list:
+            out_dir = os.path.join(args.output_dir, m)
+            os.makedirs(out_dir, exist_ok=True)
+            train_model(args.data_dir, m, args.encoder_name, out_dir, args.limit_samples)
+    else:
+        train_model(args.data_dir, args.model_name, args.encoder_name, args.output_dir, args.limit_samples)
