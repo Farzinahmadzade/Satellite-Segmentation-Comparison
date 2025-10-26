@@ -50,16 +50,14 @@ def train_model(data_dir, model_name, encoder_name, output_dir, limit_samples=0)
     writer = SummaryWriter(log_dir)
 
     full_dataset = SegmentationDataset(
-        data_dir, split="train", image_size=Config.IMAGE_SIZE, limit_samples=limit_samples
-    )
+        data_dir, split="train", image_size=Config.IMAGE_SIZE, limit_samples=limit_samples)
     total_size = len(full_dataset)
     val_size = int(total_size * Config.VAL_SPLIT)
     train_size = total_size - val_size
 
     train_dataset, val_dataset = random_split(
         full_dataset, [train_size, val_size],
-        generator=torch.Generator().manual_seed(42)
-    )
+        generator=torch.Generator().manual_seed(42))
 
     train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True,
                               num_workers=Config.NUM_WORKERS, pin_memory=True)
@@ -165,8 +163,7 @@ if __name__ == "__main__":
 
     model_list = [
         "unet","unet++","fpn","pspnet","deeplabv3","deeplabv3+","linknet",
-        "manet","pan","upernet","segformer","dpt"
-    ]
+        "manet","pan","upernet","segformer","dpt"]
 
     if args.model_name.lower() == "all":
         for m in model_list:
