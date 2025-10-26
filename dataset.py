@@ -51,11 +51,10 @@ class SegmentationDataset(Dataset):
 
         self.transform_img = transforms.Compose([
             transforms.Resize(self.image_size),
-            transforms.ToTensor(),
-        ])
+            transforms.ToTensor(),])
+        
         self.transform_mask = transforms.Compose([
-            transforms.Resize(self.image_size, interpolation=Image.NEAREST),
-        ])
+            transforms.Resize(self.image_size, interpolation=Image.NEAREST),])
 
     def __len__(self):
         return len(self.images)
