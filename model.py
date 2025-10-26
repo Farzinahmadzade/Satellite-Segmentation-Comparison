@@ -1,10 +1,39 @@
 import segmentation_models_pytorch as smp
 
-def get_model(model_name="unet", encoder_name="resnet34", num_classes=9):
-    if model_name.lower() == "unet":
-        model = smp.Unet(encoder_name=encoder_name, encoder_weights="imagenet", classes=num_classes, activation=None)
-    elif model_name.lower() == "fpn":
-        model = smp.FPN(encoder_name=encoder_name, encoder_weights="imagenet", classes=num_classes, activation=None)
+def get_model(model_name='unet', encoder_name='resnet34', in_channels=3, classes=9):
+    """
+    Returns a segmentation model from segmentation_models_pytorch
+    Supports: Unet, Unet++, FPN, PSPNet, DeepLabV3, DeepLabV3+, Linknet,
+              MAnet, PAN, UPerNet, Segformer, DPT
+    """
+
+    name = model_name.lower()
+
+    if name == 'unet':
+        model = smp.Unet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name in ['unet++', 'unetplusplus', 'unetplus']:
+        model = smp.UnetPlusPlus(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'fpn':
+        model = smp.FPN(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'pspnet':
+        model = smp.PSPNet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'deeplabv3':
+        model = smp.DeepLabV3(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name in ['deeplabv3+', 'deeplabv3plus']:
+        model = smp.DeepLabV3Plus(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'linknet':
+        model = smp.Linknet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'manet':
+        model = smp.MAnet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'pan':
+        model = smp.PAN(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'upernet':
+        model = smp.UPerNet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'segformer':
+        model = smp.Segformer(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
+    elif name == 'dpt':
+        model = smp.DPT(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
     else:
-        raise ValueError(f"Unknown model: {model_name}")
+        raise NotImplementedError(f"Model '{model_name}' not supported.")
+    
     return model
