@@ -122,19 +122,19 @@ Metrics are implemented in utils.py:
 Visualizations allow comparing input, ground truth, and prediction side by side for each epoch.
 
 # Design Choices
-#### Small epochs & batch size:
+###### Small epochs & batch size:
 Designed for testing or GPU-limited environments. Can be increased for full training.
 
-#### Paired dataset filtering:
+###### Paired dataset filtering:
 Ensures training only on valid image-mask pairs to prevent runtime errors.
 
-#### Top regions filtering:
+###### Top regions filtering:
 Allows focusing experiments on key regions of interest.
 
-#### SMP models:
+###### SMP models:
 Provides a wide variety of architectures with minimal setup and consistent interface.
 
-#### TensorBoard logging:
+###### TensorBoard logging:
 Essential for monitoring training, diagnosing problems, and visual comparison.
 
 # References
