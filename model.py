@@ -25,8 +25,6 @@ def get_model(model_name='unet', encoder_name='resnet34', in_channels=3, classes
         model = smp.UPerNet(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
     elif name == 'segformer':
         model = smp.Segformer(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
-    elif name == 'dpt':
-        model = smp.DPT(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
     else:
         raise NotImplementedError(f"Model '{model_name}' not supported.")
 
