@@ -3,7 +3,7 @@ class Config:
     NUM_CLASSES = 9
     CLASS_NAMES = [
         "bareland", "rangeland", "development", "road", "tree",
-        "water", "agricultural", "building", "nodata" ]
+        "water", "agricultural", "building", "nodata"]
     BATCH_SIZE = 4
     EPOCHS = 5
     LEARNING_RATE = 1e-4
