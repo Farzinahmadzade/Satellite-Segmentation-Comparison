@@ -1,48 +1,36 @@
 import os
-import shutil
 import torch
-from torch.utils.data import DataLoader, random_split
 from torch import nn, optim
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from dataset import SegmentationDataset
-from config import Config
 from model import get_model
-from utils import Metrics
-import argparse
 
-def train_model(data_dir, model_name, encoder_name, output_dir, limit_samples=0):
+def train_model(data_dir, model_name, encoder_name, output_dir,
+                limit_samples=0, epochs=5, writer=None, batch_size=4):
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
-    os.makedirs(output_dir, exist_ok=True)
-    log_dir = os.path.join(output_dir, "logs")
-    shutil.rmtree(log_dir, ignore_errors=True)
-    writer = SummaryWriter(log_dir)
+    train_dataset = SegmentationDataset(data_dir, split="train", limit_samples=limit_samples)
+    val_dataset = SegmentationDataset(data_dir, split="val", limit_samples=limit_samples)
 
-    full_dataset = SegmentationDataset(data_dir, split="train", image_size=Config.IMAGE_SIZE, limit_samples=limit_samples)
-    total_size = len(full_dataset)
-    val_size = int(total_size * Config.VAL_SPLIT)
-    train_size = total_size - val_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=Config.NUM_WORKERS, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=Config.NUM_WORKERS, pin_memory=True)
-
-    model = get_model(model_name, encoder_name, classes=Config.NUM_CLASSES).to(device)
+    model = get_model(model_name, encoder_name, classes=9).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    best_val_loss = float("inf")
-    patience_counter, early_stop_patience = 0, 5
+    best_val_iou = 0.0
 
-    for epoch in range(Config.EPOCHS):
+    train_history = {"train_loss": [], "val_loss": [], "val_iou": []}
+
+    for epoch in range(1, epochs+1):
         model.train()
-        train_loss = 0.0
-        train_metrics = {"iou": 0.0, "dice": 0.0, "acc": 0.0}
+        running_loss = 0.0
 
-        loop = tqdm(train_loader, desc=f"Epoch [{epoch+1}/{Config.EPOCHS}] Training", leave=False)
+        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [{model_name}]")
         for images, masks in loop:
             images, masks = images.to(device), masks.to(device)
             optimizer.zero_grad()
@@ -50,69 +38,43 @@ def train_model(data_dir, model_name, encoder_name, output_dir, limit_samples=0)
             loss = criterion(outputs, masks)
             loss.backward()
             optimizer.step()
+            running_loss += loss.item()
 
-            batch_metrics = Metrics.compute_batch_metrics(outputs, masks, Config.NUM_CLASSES)
-            for k in train_metrics:
-                train_metrics[k] += batch_metrics[k]
-            train_loss += loss.item()
-
-        num_batches = len(train_loader)
-        for k in train_metrics:
-            train_metrics[k] /= num_batches
-        train_loss /= num_batches
+        train_loss = running_loss / len(train_loader)
+        train_history["train_loss"].append(train_loss)
 
         model.eval()
         val_loss = 0.0
-        val_metrics = {"iou": 0.0, "dice": 0.0, "acc": 0.0}
+        total_iou = 0.0
         with torch.no_grad():
             for images, masks in val_loader:
                 images, masks = images.to(device), masks.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, masks)
                 val_loss += loss.item()
-                batch_metrics = Metrics.compute_batch_metrics(outputs, masks, Config.NUM_CLASSES)
-                for k in val_metrics:
-                    val_metrics[k] += batch_metrics[k]
 
-        val_batches = len(val_loader)
-        for k in val_metrics:
-            val_metrics[k] /= val_batches
-        val_loss /= val_batches
-        scheduler.step(val_loss)
+                preds = torch.argmax(outputs, dim=1)
 
-        writer.add_scalars("Loss", {"Train": train_loss, "Val": val_loss}, epoch)
-        writer.add_scalars("IoU", {"Train": train_metrics["iou"], "Val": val_metrics["iou"]}, epoch)
-        writer.add_scalars("Dice", {"Train": train_metrics["dice"], "Val": val_metrics["dice"]}, epoch)
-        writer.add_scalars("Accuracy", {"Train": train_metrics["acc"], "Val": val_metrics["acc"]}, epoch)
+                intersection = ((preds == masks) & (masks >= 0)).float().sum()
+                union = ((preds >= 0) | (masks >= 0)).float().sum()
+                iou = (intersection / (union + 1e-6)).item()
+                total_iou += iou
 
-        print(f"Epoch {epoch+1}: Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, IoU={val_metrics['iou']:.3f}")
+        val_loss /= len(val_loader)
+        val_iou = total_iou / len(val_loader)
+        train_history["val_loss"].append(val_loss)
+        train_history["val_iou"].append(val_iou)
 
-        model_path = os.path.join(output_dir, f"epoch_{epoch+1}_val_{val_loss:.4f}.pth")
-        torch.save(model.state_dict(), model_path)
+        print(f"Epoch {epoch}: Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, IoU={val_iou:.3f}")
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_counter = 0
-            best_path = os.path.join(output_dir, "best_model.pth")
-            torch.save(model.state_dict(), best_path)
-            print(f"New best model saved: {best_path}")
-        else:
-            patience_counter += 1
-            if patience_counter >= early_stop_patience:
-                print("Early stopping triggered.")
-                break
+        if val_iou > best_val_iou:
+            best_val_iou = val_iou
+            torch.save(model.state_dict(), os.path.join(output_dir, "best_model.pth"))
 
-    writer.close()
-    print(f"Training completed! Best model: {best_path}")
+        if writer:
+            writer.add_scalar("Loss/train", train_loss, epoch)
+            writer.add_scalar("Loss/val", val_loss, epoch)
+            writer.add_scalar("IoU/val", val_iou, epoch)
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--model_name", type=str, default="unet")
-    parser.add_argument("--encoder_name", type=str, default="resnet34")
-    parser.add_argument("--output_dir", type=str, default="./outputs")
-    parser.add_argument("--limit_samples", type=int, default=0)
-    args = parser.parse_args()
-
-    train_model(args.data_dir, args.model_name, args.encoder_name, args.output_dir, args.limit_samples)
+    print(f"Training completed! Best IoU: {best_val_iou:.3f}")
+    return train_history
