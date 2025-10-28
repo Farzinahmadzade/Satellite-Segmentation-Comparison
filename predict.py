@@ -1,114 +1,138 @@
 import os
 import torch
+import argparse
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-from model import get_model
-from config import Config
 from tqdm import tqdm
+from PIL import Image
+import matplotlib.pyplot as plt
+from config import Config
+from model import get_model
+from torch.utils.tensorboard import SummaryWriter
+from torchvision.utils import make_grid
 
-CLASS_NAMES = ['bareland','rangeland','development','road','tree','water','agricultural','building','nodata']
-CLASS_COLORS = [
-    (210,180,140), (34,139,34), (220,20,60), (128,128,128),
-    (0,100,0), (30,144,255), (255,215,0), (178,34,34), (0,0,0)]
 
-def load_image(img_path, image_size):
-    img = np.array(Image.open(img_path))
-    if img.ndim == 2:
-        img = np.stack([img]*3, axis=-1)
-    img = Image.fromarray(img)
-    if isinstance(image_size, int):
-        img = img.resize((image_size, image_size), resample=Image.BILINEAR)
-    elif isinstance(image_size, tuple):
-        img = img.resize(image_size, resample=Image.BILINEAR)
-    img_tensor = torch.tensor(np.array(img)/255.0, dtype=torch.float32).permute(2,0,1)
-    return img_tensor.unsqueeze(0)
+def load_image(path, image_size):
+    img = Image.open(path).convert("RGB")
+    img = img.resize(image_size)
+    img = np.array(img) / 255.0
+    img = np.transpose(img, (2, 0, 1))
+    return torch.tensor(img, dtype=torch.float32).unsqueeze(0)
 
-def load_mask(mask_path, image_size):
-    mask = Image.open(mask_path)
-    if isinstance(image_size, int):
-        mask = mask.resize((image_size, image_size), resample=Image.NEAREST)
-    elif isinstance(image_size, tuple):
-        mask = mask.resize(image_size, resample=Image.NEAREST)
-    return torch.from_numpy(np.array(mask)).long()
 
-def colorize_mask(mask):
-    h, w = mask.shape
-    color_mask = np.zeros((h, w, 3), dtype=np.uint8)
-    for idx, color in enumerate(CLASS_COLORS):
-        color_mask[mask==idx] = color
-    return Image.fromarray(color_mask)
+def load_mask(path, image_size):
+    mask = Image.open(path).convert("L").resize(image_size, Image.NEAREST)
+    return np.array(mask, dtype=np.uint8)
 
-def visualize_prediction(img_tensor, mask_tensor, pred_tensor, output_path):
-    img = (img_tensor.permute(1,2,0).numpy()*255).astype(np.uint8)
-    img_pil = Image.fromarray(img)
 
-    mask_color = colorize_mask(mask_tensor.numpy())
-    pred_color = colorize_mask(pred_tensor.numpy())
+def pred_to_rgb(pred):
 
-    total_width = img_pil.width*3
-    total_height = img_pil.height
-    new_img = Image.new('RGB', (total_width, total_height))
-    new_img.paste(img_pil, (0,0))
-    new_img.paste(mask_color, (img_pil.width,0))
-    new_img.paste(pred_color, (img_pil.width*2,0))
+    colormap = plt.get_cmap('tab20', Config.NUM_CLASSES)
+    normalized = pred.astype(np.float32) / max(1, (Config.NUM_CLASSES - 1))
+    colored = colormap(normalized)[:, :, :3]
+    colored = (colored * 255).astype(np.uint8)
+    return colored
 
-    draw = ImageDraw.Draw(new_img)
-    font = None
-    try:
-        font = ImageFont.truetype("arial.ttf", 16)
-    except:
-        font = ImageFont.load_default()
-    for i, (name, color) in enumerate(zip(CLASS_NAMES, CLASS_COLORS)):
-        y = i*20
-        draw.rectangle([10, y+10, 30, y+30], fill=color)
-        draw.text((35, y+10), name, fill=(255,255,255), font=font)
+def save_composite(image, label, pred_rgb, path):
 
-    new_img.save(output_path)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    axes[0].imshow(image)
+    axes[0].set_title("Input")
+    axes[1].imshow(label, cmap='tab20', vmin=0, vmax=Config.NUM_CLASSES-1)
+    axes[1].set_title("Label")
+    axes[2].imshow(pred_rgb)
+    axes[2].set_title("Prediction")
+    for ax in axes:
+        ax.axis("off")
+    plt.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image_dir", type=str, required=True)
-    parser.add_argument("--mask_dir", type=str, default=None)
-    parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--model_name", type=str, default="unet")
-    parser.add_argument("--encoder_name", type=str, default="resnet34")
-    parser.add_argument("--output_dir", type=str, default="./predictions")
-    args = parser.parse_args()
+def add_samples_to_tensorboard(writer, images_list, masks_list, preds_list, step):
+
+    imgs_to_show = []
+    for img, mask, pred in zip(images_list, masks_list, preds_list):
+        img_tensor = torch.tensor(img).permute(2, 0, 1).float() / 255.0
+        label_rgb = pred_to_rgb(mask)
+        label_tensor = torch.tensor(label_rgb).permute(2, 0, 1).float() / 255.0
+        pred_rgb = pred_to_rgb(pred)
+        pred_tensor = torch.tensor(pred_rgb).permute(2, 0, 1).float() / 255.0
+        combined = torch.cat([img_tensor, label_tensor, pred_tensor], dim=2)
+        imgs_to_show.append(combined)
+
+    n = len(imgs_to_show)
+    nrow = min(n, 5)
+    grid = make_grid(imgs_to_show, nrow=nrow, padding=4)
+    writer.add_image("Predictions_Grid", grid, global_step=step)
+
+def robust_load_state_dict(model, path, device):
+
+    loaded = torch.load(path, map_location=device)
+    if isinstance(loaded, dict) and "state_dict" in loaded and isinstance(loaded["state_dict"], dict):
+        state_dict = loaded["state_dict"]
+    else:
+        state_dict = loaded
+    model.load_state_dict(state_dict)
+
+def main(args):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
 
     os.makedirs(args.output_dir, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🧠 Using device: {device}")
+
+    tb_logdir = os.path.join("outputs", "logs")
+    os.makedirs(tb_logdir, exist_ok=True)
+    writer = SummaryWriter(log_dir=tb_logdir)
+
+    image_files = sorted([f for f in os.listdir(args.image_dir) if f.lower().endswith(('.png', '.jpg', '.tif'))])
+    print(f"Found {len(image_files)} images for prediction")
 
     model = get_model(args.model_name, args.encoder_name, classes=Config.NUM_CLASSES)
-    model.load_state_dict(torch.load(args.model_path, map_location=device))
+    robust_load_state_dict(model, args.model_path, device)
     model.to(device)
     model.eval()
-    print(f"✅ Loaded model from {args.model_path}")
+    print(f"Loaded model from {args.model_path}")
 
-    img_files = sorted([os.path.join(args.image_dir,f) for f in os.listdir(args.image_dir) if f.lower().endswith('.tif')])
-    mask_files = None
-    if args.mask_dir:
-        mask_files = sorted([os.path.join(args.mask_dir,f) for f in os.listdir(args.mask_dir) if f.lower().endswith('.tif')])
+    sample_imgs, sample_labels, sample_preds = [], [], []
 
-    for i, img_path in enumerate(tqdm(img_files, desc="Predicting")):
+    for idx, name in enumerate(tqdm(image_files, desc="Predicting")):
+        img_path = os.path.join(args.image_dir, name)
+        mask_path = os.path.join(args.mask_dir, name) if args.mask_dir else None
+
         try:
             img_tensor = load_image(img_path, Config.IMAGE_SIZE).to(device)
             with torch.no_grad():
                 output = model(img_tensor)
-                pred = torch.argmax(output, dim=1).squeeze(0).cpu()
+                probs = torch.softmax(output, dim=1)
+                pred = torch.argmax(probs, dim=1).cpu().squeeze().numpy()
 
-            if mask_files:
-                mask_tensor = load_mask(mask_files[i], Config.IMAGE_SIZE)
-            else:
-                mask_tensor = torch.zeros_like(pred)
+            img_disp = np.array(Image.open(img_path).convert("RGB").resize(Config.IMAGE_SIZE))
+            label_disp = load_mask(mask_path, Config.IMAGE_SIZE) if mask_path and os.path.exists(mask_path) else np.zeros_like(pred)
 
-            out_path = os.path.join(args.output_dir, f"{i}_pred.png")
-            visualize_prediction(img_tensor.squeeze(0).cpu(), mask_tensor, pred, out_path)
+            pred_rgb = pred_to_rgb(pred)
+            out_path = os.path.join(args.output_dir, f"{os.path.splitext(name)[0]}_comparison.png")
+            save_composite(img_disp, label_disp, pred_rgb, out_path)
+
+            if len(sample_imgs) < 10:
+                sample_imgs.append(img_disp)
+                sample_labels.append(label_disp)
+                sample_preds.append(pred)
+
         except Exception as e:
-            print(f"⚠️ Skipping {img_path} due to error: {e}")
+            print(f"Skipping {name}: {e}")
 
-    print(f"\n✅ Predictions saved to {args.output_dir}")
+    if len(sample_imgs) > 0:
+        add_samples_to_tensorboard(writer, sample_imgs, sample_labels, sample_preds, step=0)
+
+    writer.close()
+    print(f"Predictions saved to {args.output_dir} and images logged to {tb_logdir}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image_dir", required=True)
+    parser.add_argument("--mask_dir", default=None)
+    parser.add_argument("--model_path", required=True)
+    parser.add_argument("--model_name", default="unet")
+    parser.add_argument("--encoder_name", default="resnet34")
+    parser.add_argument("--output_dir", required=True)
+    args = parser.parse_args()
+    main(args)
