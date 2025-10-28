@@ -1,12 +1,6 @@
 import segmentation_models_pytorch as smp
 
 def get_model(model_name='unet', encoder_name='resnet34', in_channels=3, classes=9):
-    """
-    Returns a segmentation model from segmentation_models_pytorch
-    Supports: Unet, Unet++, FPN, PSPNet, DeepLabV3, DeepLabV3+, Linknet,
-              MAnet, PAN, UPerNet, Segformer, DPT
-    """
-
     name = model_name.lower()
 
     if name == 'unet':
@@ -35,5 +29,5 @@ def get_model(model_name='unet', encoder_name='resnet34', in_channels=3, classes
         model = smp.DPT(encoder_name=encoder_name, in_channels=in_channels, classes=classes)
     else:
         raise NotImplementedError(f"Model '{model_name}' not supported.")
-    
+
     return model
