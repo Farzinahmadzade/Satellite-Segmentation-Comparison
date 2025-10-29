@@ -1,33 +1,57 @@
-import os, sys
+import os
+import sys
+from datetime import datetime
+from torch.utils.tensorboard import SummaryWriter
+
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_DIR not in sys.path:
     sys.path.append(PROJECT_DIR)
 
-if __name__ == "__main__":
+from train import train_model
+
+
+MODELS = [
+    "unet", "unet++", "fpn", "pspnet", "deeplabv3",
+    "deeplabv3+", "linknet", "manet", "pan", "upernet", "segformer"
+]
+
+
+def main():
     import argparse
-    from train import train_model
-    from torch.utils.tensorboard import SummaryWriter
-
-    MODELS = [
-        "unet", "unet++", "fpn", "pspnet", "deeplabv3",
-        "deeplabv3+", "linknet", "manet", "pan", "upernet", "segformer"
-    ]
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, default="./outputs_all_models")
-    parser.add_argument("--limit_samples", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=5)
+    parser = argparse.ArgumentParser(description="Train all segmentation models on OpenEarthMap")
+    parser.add_argument("--data_dir", type=str, required=True, help="Path to dataset root")
+    parser.add_argument("--output_dir", type=str, default="./outputs_all_models", help="Output directory")
+    parser.add_argument("--limit_samples", type=int, default=0, help="Limit training samples")
+    parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     for model_name in MODELS:
-        print(f"\n\n=== Training {model_name} ===")
+        print(f"\n{'='*60}")
+        print(f" TRAINING: {model_name.upper()} ")
+        print(f"{'='*60}")
+
         model_output_dir = os.path.join(args.output_dir, model_name)
         os.makedirs(model_output_dir, exist_ok=True)
 
-        tb_writer = SummaryWriter(os.path.join(model_output_dir, "logs"))
+        tb_writer = SummaryWriter(
+            log_dir=os.path.join(model_output_dir, "logs"),
+            name=f"{model_name}_resnet34",
+            comment="OpenEarthMap Benchmark"
+        )
+
+        tb_writer.add_text(
+            "Experiment Info",
+            f"""
+**Model**: `{model_name}`  
+**Encoder**: `resnet34`  
+**Dataset**: `OpenEarthMap`  
+**Train/Val Split**: `80/20`  
+**Started**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
+            """.strip(),
+            global_step=0
+        )
 
         train_model(
             data_dir=args.data_dir,
@@ -40,3 +64,7 @@ if __name__ == "__main__":
         )
 
         tb_writer.close()
+
+
+if __name__ == "__main__":
+    main()
