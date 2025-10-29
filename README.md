@@ -101,8 +101,25 @@ Satellite-Segmentation-Comparison/
 ## Quick test with limited samples:
 ```python train.py --data_dir "PATH_TO_DATASET" --model_name unet --encoder_name resnet34 --output_dir "./outputs" --limit_samples 10```
 
-## Training all models sequentially:
-```python train.py --data_dir "PATH_TO_DATASET" --model_name all --encoder_name resnet34 --output_dir "./outputs"```
+## Train all 11 models (recommended):
+```python train_all_models.py \
+  --data_dir "path/to/OpenEarthMap" \
+  --epochs 50 \
+  --limit_samples 0 ```
+```
+# Predict with one model
+```python predict.py \
+  --image_dir "aachen/images" \
+  --model_path "outputs_all_models/unet/best_model.pth" \
+  --model_name unet
+  ```
+
+# Predict with all 11 models  
+```python predict_all_models.py \
+  --image_dir "aachen/images" \
+  --model_dir "outputs_all_models" \
+  --pred_dir "predictions_all_models"  
+```
 
 # TensorBoard
 ## View training progress:
