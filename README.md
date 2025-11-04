@@ -159,5 +159,4 @@ Essential for monitoring training, diagnosing problems, and visual comparison.
 OpenEarthMap Dataset: [https://github.com/
 ..., etc.]
 
-Segmentation Models PyTorch: [https://smp.readthedocs.io/
-]
+Segmentation Models PyTorch: [https://smp.readthedocs.io/]
