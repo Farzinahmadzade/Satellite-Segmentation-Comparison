@@ -5,7 +5,7 @@ class Config:
         "bareland", "rangeland", "development", "road", "tree",
         "water", "agricultural", "building", "nodata"
     ]
-    BATCH_SIZE = 4
+    BATCH_SIZE = 2
     EPOCHS = 5
     LEARNING_RATE = 1e-4
     VAL_SPLIT = 0.2
