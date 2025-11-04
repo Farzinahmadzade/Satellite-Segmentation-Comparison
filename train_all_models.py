@@ -9,7 +9,6 @@ if PROJECT_DIR not in sys.path:
 
 from train import train_model
 
-
 MODELS = [
     "unet", "unet++", "fpn", "pspnet", "deeplabv3",
     "deeplabv3+", "linknet", "manet", "pan", "upernet", "segformer"
@@ -18,11 +17,11 @@ MODELS = [
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Train all segmentation models on OpenEarthMap")
-    parser.add_argument("--data_dir", type=str, required=True, help="Path to dataset root")
-    parser.add_argument("--output_dir", type=str, default="./outputs_all_models", help="Output directory")
-    parser.add_argument("--limit_samples", type=int, default=0, help="Limit training samples")
-    parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
+    parser = argparse.ArgumentParser(description="Train all segmentation models")
+    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--output_dir", type=str, default="./outputs_all_models")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--limit_samples", type=int, default=0)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -32,38 +31,34 @@ def main():
         print(f" TRAINING: {model_name.upper()} ")
         print(f"{'='*60}")
 
-        model_output_dir = os.path.join(args.output_dir, model_name)
-        os.makedirs(model_output_dir, exist_ok=True)
+        model_dir = os.path.join(args.output_dir, model_name)
+        log_dir = os.path.join(model_dir, "logs")
+        os.makedirs(log_dir, exist_ok=True)
 
-        tb_writer = SummaryWriter(
-            log_dir=os.path.join(model_output_dir, "logs"),
-            name=f"{model_name}_resnet34",
-            comment="OpenEarthMap Benchmark"
-        )
+        writer = SummaryWriter(log_dir=log_dir)
 
-        tb_writer.add_text(
+        writer.add_text(
             "Experiment Info",
-            f"""
-**Model**: `{model_name}`  
-**Encoder**: `resnet34`  
-**Dataset**: `OpenEarthMap`  
-**Train/Val Split**: `80/20`  
-**Started**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
-            """.strip(),
-            global_step=0
+            f"Model: {model_name}, Epochs: {args.epochs}, Started: {datetime.now():%Y-%m-%d %H:%M:%S}"
         )
 
+        # --- Train model ---
         train_model(
             data_dir=args.data_dir,
             model_name=model_name,
             encoder_name="resnet34",
-            output_dir=model_output_dir,
+            output_dir=model_dir,
             limit_samples=args.limit_samples,
             epochs=args.epochs,
-            writer=tb_writer
+            writer=writer
         )
 
-        tb_writer.close()
+        # --- Flush and close writer to ensure logs are written ---
+        writer.flush()
+        writer.close()
+        print(f"  [Success] TensorBoard logs saved for {model_name}")
+
+    print(f"\nAll models trained! Logs are in: {args.output_dir}")
 
 
 if __name__ == "__main__":
