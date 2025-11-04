@@ -5,16 +5,19 @@ import numpy as np
 from tqdm import tqdm
 import rasterio
 from model import get_model
+from torchvision import transforms
+
+NORMALIZE = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
 
 
-def make_divisible_by_32(img: np.ndarray) -> tuple:
+def make_divisible_by_32(img: np.ndarray):
+    """Pad image to be divisible by 32."""
     h, w = img.shape[:2]
     new_h = ((h - 1) // 32 + 1) * 32
     new_w = ((w - 1) // 32 + 1) * 32
     pad_h, pad_w = new_h - h, new_w - w
-    img_padded = np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant')
-    return img_padded, (pad_h, pad_w)
-
+    return np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant'), (pad_h, pad_w)
 
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -37,20 +40,20 @@ def main(args):
             h, w = src.height, src.width
 
         img_padded, (pad_h, pad_w) = make_divisible_by_32(img)
-        tensor = torch.tensor(img_padded).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-        tensor = tensor.to(device)
+        tensor = torch.from_numpy(img_padded).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        tensor = NORMALIZE(tensor).to(device)
 
         with torch.no_grad():
             pred = torch.argmax(model(tensor).squeeze(0), dim=0).cpu().numpy()
         pred = pred[:h, :w]
 
-        out_path = os.path.join("predictions", name.replace(".tif", f"_pred_{args.model_name}.tif"))
+        out_path = os.path.join("predictions",
+                                name.replace(".tif", f"_pred_{args.model_name}.tif"))
         profile.update(dtype=rasterio.uint8, count=1, compress='deflate')
         with rasterio.open(out_path, 'w', **profile) as dst:
             dst.write(pred.astype(rasterio.uint8), 1)
 
-    print(f"Done! Predictions saved to: predictions/")
-
+    print("Done! Predictions saved to: predictions/")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
